@@ -174,6 +174,7 @@ class LambdaCloudClient:
             'ssh_key_names': [ssh_key_name],
             'quantity': quantity,
             'name': name,
+            'file_system_names': ['data'],
         })
         response = _try_request_with_backoff(
             'post',
