@@ -4902,3 +4902,36 @@ class LambdaStore(AbstractStore):
         """Not supported for Lambda file systems."""
         raise NotImplementedError(
             'Sync operations are not supported for Lambda file systems.')
+
+    def upload(self) -> None:
+        """Upload is not applicable for Lambda file systems.
+        
+        Lambda file systems must pre-exist and cannot be created or modified
+        via SkyPilot. This method is a no-op since there's nothing to upload.
+        """
+        # No-op: Lambda filesystems are pre-existing and read-only from
+        # SkyPilot's perspective. The actual data is managed externally.
+        pass
+
+    def delete(self) -> None:
+        """Delete is not supported for Lambda file systems.
+        
+        Lambda file systems cannot be deleted via SkyPilot and must be
+        managed through the Lambda Cloud console or API.
+        """
+        logger.info(f'Lambda filesystem {self.name} cannot be deleted '
+                    'via SkyPilot. Please delete it manually in Lambda Cloud.')
+
+    def get_handle(self) -> StorageHandle:
+        """Returns the filesystem name as the handle.
+        
+        For Lambda file systems, the handle is just the filesystem name
+        since we don't perform actual bucket operations.
+        """
+        return self.name
+
+    def download_remote_dir(self, local_path: str) -> None:
+        """Not supported for Lambda file systems."""
+        raise NotImplementedError(
+            'Downloading from Lambda file systems is not supported. '
+            'Lambda file systems can only be mounted.')
