@@ -1,5 +1,4 @@
 """YAML utilities."""
-import enum
 import io
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 
@@ -101,12 +100,6 @@ def dump_yaml_str(config: Union[List[Dict[str, Any]], Dict[str, Any]]) -> str:
             super().write_line_break(data)
             if len(self.indents) == 1:
                 super().write_line_break()
-
-    # Add custom representer for Enum types to convert them to their string values
-    def represent_enum(dumper, data):
-        return dumper.represent_str(str(data.value))
-    
-    LineBreakDumper.add_representer(enum.Enum, represent_enum)
 
     if isinstance(config, list):
         dump_func = yaml.dump_all  # type: ignore

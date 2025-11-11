@@ -62,7 +62,6 @@ STORE_ENABLED_CLOUDS: List[str] = [
     str(clouds.IBM()),
     str(clouds.OCI()),
     str(clouds.Nebius()),
-    str(clouds.Lambda()),
     cloudflare.NAME,
     coreweave.NAME,
 ]
@@ -102,14 +101,6 @@ def get_cached_enabled_storage_cloud_names_or_refresh(
     if coreweave_is_enabled:
         enabled_clouds.append(coreweave.NAME)
 
-    # Lambda file systems use the same credentials as Lambda compute
-    # Check if Lambda is enabled for compute (which includes file system access)
-    lambda_clouds = sky_check.get_cached_enabled_clouds_or_refresh(
-        sky_cloud.CloudCapability.COMPUTE)
-    lambda_cloud_names = [str(cloud) for cloud in lambda_clouds]
-    if str(clouds.Lambda()) in lambda_cloud_names:
-        enabled_clouds.append(str(clouds.Lambda()))
-
     if raise_if_no_cloud_access and not enabled_clouds:
         raise exceptions.NoCloudAccessError(
             'No cloud access available for storage. '
@@ -145,7 +136,6 @@ class StoreType(enum.Enum):
     NEBIUS = 'NEBIUS'
     COREWEAVE = 'COREWEAVE'
     VOLUME = 'VOLUME'
-    LAMBDA = 'LAMBDA'
 
     @classmethod
     def _get_s3_compatible_store_by_cloud(cls,
@@ -188,7 +178,8 @@ class StoreType(enum.Enum):
         elif cloud_lower == str(clouds.OCI()).lower():
             return StoreType.OCI
         elif cloud_lower == str(clouds.Lambda()).lower():
-            return StoreType.LAMBDA
+            with ux_utils.print_exception_no_traceback():
+                raise ValueError('Lambda Cloud does not provide cloud storage.')
         elif cloud_lower == str(clouds.SCP()).lower():
             with ux_utils.print_exception_no_traceback():
                 raise ValueError('SCP does not provide cloud storage.')
@@ -212,8 +203,6 @@ class StoreType(enum.Enum):
             return str(clouds.IBM())
         elif self == StoreType.OCI:
             return str(clouds.OCI())
-        elif self == StoreType.LAMBDA:
-            return str(clouds.Lambda())
         else:
             raise ValueError(f'Unknown store type: {self}')
 
@@ -230,8 +219,6 @@ class StoreType(enum.Enum):
             return StoreType.IBM
         elif isinstance(store, OciStore):
             return StoreType.OCI
-        elif isinstance(store, LambdaStore):
-            return StoreType.LAMBDA
         else:
             with ux_utils.print_exception_no_traceback():
                 raise ValueError(f'Unknown store type: {store}')
@@ -652,9 +639,7 @@ class Storage(object):
         # pylint: disable=invalid-name
         _is_sky_managed: Optional[bool] = None,
         # pylint: disable=invalid-name
-        _bucket_sub_path: Optional[str] = None,
-        # Lambda-specific parameter
-        filesystem_id: Optional[str] = None,
+        _bucket_sub_path: Optional[str] = None
     ) -> None:
         """Initializes a Storage object.
 
@@ -718,8 +703,6 @@ class Storage(object):
         self.sync_on_reconstruction = sync_on_reconstruction
         self._is_sky_managed = _is_sky_managed
         self._bucket_sub_path = _bucket_sub_path
-        # Lambda-specific: store filesystem_id for Lambda file systems
-        self.filesystem_id = filesystem_id
 
         self._constructed = False
         # TODO(romilb, zhwu): This is a workaround to support storage deletion
@@ -1197,31 +1180,18 @@ class Storage(object):
             store_cls = IBMCosStore
         elif store_type == StoreType.OCI:
             store_cls = OciStore
-        elif store_type == StoreType.LAMBDA:
-            store_cls = LambdaStore
         else:
             with ux_utils.print_exception_no_traceback():
                 raise exceptions.StorageSpecError(
                     f'{store_type} not supported as a Store.')
         try:
-            # Special handling for Lambda store to pass filesystem_id
-            if store_type == StoreType.LAMBDA:
-                store = store_cls(
-                    name=self.name,
-                    source=self.source,
-                    region=region,
-                    sync_on_reconstruction=self.sync_on_reconstruction,
-                    is_sky_managed=self._is_sky_managed,
-                    _bucket_sub_path=self._bucket_sub_path,
-                    filesystem_id=self.filesystem_id)
-            else:
-                store = store_cls(
-                    name=self.name,
-                    source=self.source,
-                    region=region,
-                    sync_on_reconstruction=self.sync_on_reconstruction,
-                    is_sky_managed=self._is_sky_managed,
-                    _bucket_sub_path=self._bucket_sub_path)
+            store = store_cls(
+                name=self.name,
+                source=self.source,
+                region=region,
+                sync_on_reconstruction=self.sync_on_reconstruction,
+                is_sky_managed=self._is_sky_managed,
+                _bucket_sub_path=self._bucket_sub_path)
         except exceptions.StorageBucketCreateError:
             # Creation failed, so this must be sky managed store. Add failure
             # to state.
@@ -1380,8 +1350,6 @@ class Storage(object):
         _is_sky_managed = config.pop('_is_sky_managed', None)
         # pylint: disable=invalid-name
         _bucket_sub_path = config.pop('_bucket_sub_path', None)
-        # Lambda-specific: filesystem_id
-        filesystem_id = config.pop('filesystem_id', None)
         if force_delete is None:
             force_delete = False
 
@@ -1407,8 +1375,7 @@ class Storage(object):
                           mode=mode,
                           stores=stores,
                           _is_sky_managed=_is_sky_managed,
-                          _bucket_sub_path=_bucket_sub_path,
-                          filesystem_id=filesystem_id)
+                          _bucket_sub_path=_bucket_sub_path)
 
         # Add force deletion flag
         storage_obj.force_delete = force_delete
@@ -1444,8 +1411,6 @@ class Storage(object):
             config['_force_delete'] = True
         if self._bucket_sub_path is not None:
             config['_bucket_sub_path'] = self._bucket_sub_path
-        # Add Lambda-specific filesystem_id if present
-        add_if_not_none('filesystem_id', self.filesystem_id)
         return config
 
 
@@ -4787,151 +4752,3 @@ class CoreWeaveStore(S3CompatibleStore):
         data_utils.verify_coreweave_bucket(bucket_name, retry=36)
 
         return result
-
-
-class LambdaStore(AbstractStore):
-    """LambdaStore represents Lambda Cloud file system mounts.
-    
-    Unlike other store implementations, Lambda file systems:
-    - Cannot be created via SkyPilot (must pre-exist)
-    - Can only be mounted, not copied
-    - Require filesystem_id from Lambda Cloud API
-    """
-
-    def __init__(self,
-                 name: str,
-                 source: Optional[str] = None,
-                 region: Optional[str] = None,
-                 is_sky_managed: Optional[bool] = None,
-                 sync_on_reconstruction: bool = True,
-                 _bucket_sub_path: Optional[str] = None,
-                 filesystem_id: Optional[str] = None):
-        """Initialize Lambda file system store.
-        
-        Args:
-            name: Name of the filesystem (must match existing Lambda filesystem)
-            source: Not used for Lambda (filesystems must pre-exist)
-            region: Lambda region where filesystem is located
-            is_sky_managed: Always False for Lambda (can't create filesystems)
-            sync_on_reconstruction: Not used for Lambda
-            _bucket_sub_path: Not used for Lambda
-            filesystem_id: Lambda Cloud filesystem ID (hex string)
-        """
-        self.filesystem_id = filesystem_id
-        # Lambda filesystems cannot be created/managed by Sky
-        is_sky_managed = False
-        super().__init__(name, source, region, is_sky_managed,
-                         sync_on_reconstruction, _bucket_sub_path)
-
-    def _validate(self):
-        """Validate Lambda filesystem configuration."""
-        # Lambda filesystems must already exist - we can't create them
-        if self.source is not None:
-            with ux_utils.print_exception_no_traceback():
-                raise exceptions.StorageSourceError(
-                    'Lambda file systems must be pre-existing. '
-                    'The source parameter is not supported.')
-
-    def _get_bucket(self) -> Tuple[StorageHandle, bool]:
-        """Lambda filesystems must pre-exist, so this always returns existing."""
-        # We don't actually manage the filesystem, just track metadata
-        # The actual mounting happens in the provisioning layer
-        # Return a dummy handle since we don't need actual bucket operations
-        return self.name, False
-
-    def _download_remote_dir(self, remote_dir: str, local_dir: str) -> None:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Downloading from Lambda file systems is not supported. '
-            'Lambda file systems can only be mounted.')
-
-    def _upload_file_to_bucket(self, bucket: StorageHandle, blob_path: str,
-                               file_path: str) -> None:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Uploading to Lambda file systems is not supported. '
-            'Lambda file systems can only be mounted.')
-
-    def _delete_bucket(self, bucket_name: str) -> bool:
-        """Lambda filesystems cannot be deleted via SkyPilot."""
-        logger.info(f'Lambda filesystem {bucket_name} cannot be deleted '
-                    'via SkyPilot. Please delete it manually in Lambda Cloud.')
-        return False
-
-    def _delete_file(self, bucket: StorageHandle, path: str) -> None:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Deleting files from Lambda file systems is not supported.')
-
-    def mount_command(self, mount_path: str) -> str:
-        """Lambda filesystems are mounted during instance provisioning.
-        
-        This method is not used since mounting is handled by the Lambda API
-        during instance creation via the file_system_mounts parameter.
-        """
-        # Return empty command since mounting is handled at provision time
-        return ''
-
-    def mount_cached_command(self, mount_path: str) -> str:
-        """Lambda filesystems don't support mount caching."""
-        raise NotImplementedError(
-            'Cached mounting is not supported for Lambda file systems.')
-
-    def _create_bucket(self, bucket_name: str) -> StorageHandle:
-        """Lambda filesystems cannot be created via SkyPilot."""
-        raise NotImplementedError(
-            'Lambda file systems cannot be created via SkyPilot. '
-            'Please create them manually in Lambda Cloud.')
-
-    def _reset_bucket_sync_dir_if_needed(self,
-                                        bucket_name: str,
-                                        source: str,
-                                        only_if_unmatched: bool = True) -> None:
-        """Not applicable for Lambda file systems."""
-        pass
-
-    def _execute_upload_cli(self, upload_file_command: str,
-                           **kwargs) -> None:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Upload operations are not supported for Lambda file systems.')
-
-    def _get_rclone_sync_command(self, source: str, destination: str,
-                                 mode: str, max_concurrent_uploads: int = 1,
-                                 **kwargs) -> List[str]:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Sync operations are not supported for Lambda file systems.')
-
-    def upload(self) -> None:
-        """Upload is not applicable for Lambda file systems.
-        
-        Lambda file systems must pre-exist and cannot be created or modified
-        via SkyPilot. This method is a no-op since there's nothing to upload.
-        """
-        # No-op: Lambda filesystems are pre-existing and read-only from
-        # SkyPilot's perspective. The actual data is managed externally.
-        pass
-
-    def delete(self) -> None:
-        """Delete is not supported for Lambda file systems.
-        
-        Lambda file systems cannot be deleted via SkyPilot and must be
-        managed through the Lambda Cloud console or API.
-        """
-        logger.info(f'Lambda filesystem {self.name} cannot be deleted '
-                    'via SkyPilot. Please delete it manually in Lambda Cloud.')
-
-    def get_handle(self) -> StorageHandle:
-        """Returns the filesystem name as the handle.
-        
-        For Lambda file systems, the handle is just the filesystem name
-        since we don't perform actual bucket operations.
-        """
-        return self.name
-
-    def download_remote_dir(self, local_path: str) -> None:
-        """Not supported for Lambda file systems."""
-        raise NotImplementedError(
-            'Downloading from Lambda file systems is not supported. '
-            'Lambda file systems can only be mounted.')

@@ -555,9 +555,6 @@ def get_storage_schema():
             },
             '_force_delete': {
                 'type': 'boolean',
-            },
-            'filesystem_id': {
-                'type': 'string',
             }
         }
     }

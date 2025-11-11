@@ -106,9 +106,6 @@ def run_instances(region: str, cluster_name: str, cluster_name_on_cloud: str,
 
     created_instance_ids = []
     remote_ssh_key_name = config.authentication_config['remote_key_name']
-    
-    # Extract file_system_mounts from config if present
-    file_system_mounts = config.node_config.get('file_system_mounts')
 
     def launch_node(node_type: str) -> str:
         try:
@@ -120,7 +117,6 @@ def run_instances(region: str, cluster_name: str, cluster_name_on_cloud: str,
                 # https://github.com/skypilot-org/skypilot/issues/7084
                 quantity=1,
                 ssh_key_name=remote_ssh_key_name,
-                file_system_mounts=file_system_mounts,
             )
             logger.info(f'Launched {node_type} node, '
                         f'instance_id: {instance_ids[0]}')
