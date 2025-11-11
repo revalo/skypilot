@@ -146,8 +146,20 @@ class LambdaCloudClient:
         quantity: int = 1,
         name: str = '',
         ssh_key_name: str = '',
+        file_system_mounts: Optional[List[Dict[str, str]]] = None,
     ) -> List[str]:
-        """Launch new instances."""
+        """Launch new instances.
+        
+        Args:
+            instance_type: Lambda instance type name
+            region: Lambda region name
+            quantity: Number of instances to launch
+            name: Instance name
+            ssh_key_name: SSH key name registered in Lambda Cloud
+            file_system_mounts: List of filesystem mount configurations. Each dict should have:
+                - mount_point: str - Path where filesystem will be mounted
+                - file_system_id: str - Lambda filesystem ID (hex string)
+        """
         # Optimization:
         # Most API requests are rate limited at ~1 request every second but
         # launch requests are rate limited at ~1 request every 10 seconds.
@@ -168,13 +180,19 @@ class LambdaCloudClient:
                                     f'{aval_reg}'))
 
         # Try to launch instance
-        data = json.dumps({
+        data_dict = {
             'region_name': region,
             'instance_type_name': instance_type,
             'ssh_key_names': [ssh_key_name],
             'quantity': quantity,
             'name': name,
-        })
+        }
+        
+        # Add file_system_mounts if provided
+        if file_system_mounts:
+            data_dict['file_system_mounts'] = file_system_mounts
+        
+        data = json.dumps(data_dict)
         response = _try_request_with_backoff(
             'post',
             f'{API_ENDPOINT}/instance-operations/launch',

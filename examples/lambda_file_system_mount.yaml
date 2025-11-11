@@ -1,0 +1,56 @@
+# Example: Using Lambda Cloud File System Mounts
+#
+# Lambda Cloud provides persistent file systems that can be mounted to instances.
+# This example shows how to mount an existing Lambda file system to your SkyPilot cluster.
+#
+# Prerequisites:
+# 1. Create a file system in Lambda Cloud (this cannot be done via SkyPilot)
+# 2. Note down the filesystem_id (hex string) from the Lambda Cloud console or API
+# 3. The file system must be in the same region as your instance
+#
+# Usage:
+#   sky launch -c lambda-fs lambda_file_system_mount.yaml
+
+name: lambda-fs-example
+
+resources:
+  cloud: lambda
+  instance_type: gpu_1x_a100  # Or any Lambda instance type
+  region: us-east-1  # Must match your file system's region
+
+# Lambda file systems are mounted using file_mounts with special syntax
+file_mounts:
+  # The mount path - this is where the file system will be accessible in your instance
+  /home/ubuntu/my-data:
+    # Name of the filesystem (must match the name in Lambda Cloud)
+    name: my-existing-lambda-storage
+    # Store type must be "lambda"
+    store: lambda
+    # Mode must be MOUNT (Lambda doesn't support COPY mode)
+    mode: MOUNT
+    # The Lambda filesystem ID (get this from Lambda Cloud console/API)
+    # This is a hex string that uniquely identifies your filesystem
+    filesystem_id: "398578a2336b49079e74043f0bd2cfe8"
+
+# You can mount multiple file systems
+# /home/ubuntu/another-mount:
+#   name: another-lambda-storage
+#   store: lambda
+#   mode: MOUNT
+#   filesystem_id: "1234567890abcdef1234567890abcdef"
+
+setup: |
+  echo "File system should be mounted at /home/ubuntu/my-data"
+  ls -la /home/ubuntu/my-data || echo "Mount point not yet ready"
+
+run: |
+  echo "Accessing file system..."
+  ls -lh /home/ubuntu/my-data
+  df -h /home/ubuntu/my-data
+
+# Notes:
+# - Lambda file systems must be created manually in Lambda Cloud before use
+# - The filesystem_id is required and must match an existing filesystem
+# - Only MOUNT mode is supported (files cannot be copied)
+# - The file system must be in the same region as your instance
+# - Mount points are fixed by Lambda's API and cannot be customized
