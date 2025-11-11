@@ -1435,6 +1435,8 @@ class Storage(object):
             config['_force_delete'] = True
         if self._bucket_sub_path is not None:
             config['_bucket_sub_path'] = self._bucket_sub_path
+        # Add Lambda-specific filesystem_id if present
+        add_if_not_none('filesystem_id', self.filesystem_id)
         return config
 
 
