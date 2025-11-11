@@ -193,6 +193,7 @@ class LambdaCloudClient:
             data_dict['file_system_mounts'] = file_system_mounts
         
         data = json.dumps(data_dict)
+        print("POOP", data)
         response = _try_request_with_backoff(
             'post',
             f'{API_ENDPOINT}/instance-operations/launch',
