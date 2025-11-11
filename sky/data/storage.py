@@ -62,6 +62,7 @@ STORE_ENABLED_CLOUDS: List[str] = [
     str(clouds.IBM()),
     str(clouds.OCI()),
     str(clouds.Nebius()),
+    str(clouds.Lambda()),
     cloudflare.NAME,
     coreweave.NAME,
 ]
@@ -100,6 +101,13 @@ def get_cached_enabled_storage_cloud_names_or_refresh(
     coreweave_is_enabled, _ = coreweave.check_storage_credentials()
     if coreweave_is_enabled:
         enabled_clouds.append(coreweave.NAME)
+
+    # Lambda file systems use the same credentials as Lambda compute
+    # Check if Lambda is enabled for compute (which includes file system access)
+    lambda_clouds = sky_check.get_cached_enabled_clouds_or_refresh()
+    lambda_cloud_names = [str(cloud) for cloud in lambda_clouds]
+    if str(clouds.Lambda()) in lambda_cloud_names:
+        enabled_clouds.append(str(clouds.Lambda()))
 
     if raise_if_no_cloud_access and not enabled_clouds:
         raise exceptions.NoCloudAccessError(
